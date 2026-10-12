@@ -1,58 +1,107 @@
-# spotify-tokener
+# spotify-tokener (Pterodactyl-ready)
 
-A simple GoLang service which returns spotify anonymous & account tokens without having to deal with their annoying TOTP shit.
+Docker image for [topi314/spotify-tokener](https://github.com/topi314/spotify-tokener) — a small Go service that returns Spotify anonymous & account access tokens without dealing with their TOTP flow.
 
-## Installation
+This image wraps the original with two fixes that make it run properly on container hosts (especially Pterodactyl/Wings):
 
-For god's sake, just use docker. Otherwise, have fun compiling yourself:
+| Fix | Why |
+| --- | --- |
+| Binds to `${SERVER_PORT}` automatically | Pterodactyl allocates a random port per server — the app now listens on the allocated port instead of hardcoded `8080` |
+| Chrome runs with `--no-sandbox` + `--disable-dev-shm-usage` | Unprivileged container users have no user namespaces / small `/dev/shm`, so headless Chrome refuses to start otherwise |
 
-### Manual
+[![Build](https://github.com/titanxdevz/spotify-tokener-ptero/actions/workflows/build.yml/badge.svg)](https://github.com/titanxdevz/spotify-tokener-ptero/actions/workflows/build.yml)
 
-Requirements:
+## Images
 
-* [go 1.24+](https://go.dev/doc/install)
-* [chrome](https://www.google.com/chrome/)
-
-```bash
-go install github.com/topi314/spotify-tokener@master
+```
+ghcr.io/titanxdevz/spotify-tokener-ptero:latest
+ghcr.io/titanxdevz/spotify-tokener-ptero:v2
 ```
 
-Now run it via systemd or something.
+## Quick start (Docker)
 
-### Docker
+```bash
+docker run -d --name spotify-tokener --restart unless-stopped -p 8080:8080 \
+  ghcr.io/titanxdevz/spotify-tokener-ptero:v2
+```
 
-Create your `compose.yml` and run `docker compose up -d`.
+### docker compose
 
 ```yaml
 services:
   spotify-tokener:
-    image: ghcr.io/topi314/spotify-tokener:master
-    container_name: spotify-tokener
+    image: ghcr.io/titanxdevz/spotify-tokener-ptero:v2
     restart: unless-stopped
-    environment:
-#      - SPOTIFY_TOKENER_ADDR=0.0.0.0:8080
-#      - SPOTIFY_TOKENER_CHROME_PATH=chrome
-#      - SPOTIFY_TOKENER_LOG_LEVEL=INFO
     ports:
-      - 8080:8080
+      - "8080:8080"
 ```
 
+## Quick start (Pterodactyl panel)
+
+Create a server with these fields — no egg scripts needed, the binary and Chrome are baked into the image:
+
+| Field | Value |
+| --- | --- |
+| Docker Image | `ghcr.io/titanxdevz/spotify-tokener-ptero:v2` |
+| Startup Command | `/bin/spotify-tokener` |
+| Egg | any (e.g. `golang generic`) |
+| Skip install scripts | enabled |
+| Memory | ≥ 1024 MB recommended (Chrome) |
+
+Then press **Start**. Your endpoint becomes:
+
+```
+http://<node-alias>:<allocation-port>/api/token
+```
 
 ## Usage
 
-The endpoint is under `/api/token` and cookies are relayed 1:1 (like the sp_dc cookie for account login).
+### Anonymous token
 
-## License
+```bash
+curl http://localhost:8080/api/token
+```
 
-This project is licensed under the [Apache License 2.0](LICENSE).
+```json
+{
+  "clientId": "f6a40776580943a7bc5173125a1e8832",
+  "accessToken": "BQD...",
+  "accessTokenExpirationTimestampMs": 1791800086194,
+  "isAnonymous": true
+}
+```
 
-## Contributing
+### Account token (cookies relayed 1:1)
 
-Contributions are welcome, but for bigger changes, please open an issue first to discuss what you would like to change.
+Send your `sp_dc` cookie with the request:
 
-## Contact
+```bash
+curl -H "Cookie: sp_dc=<your_sp_dc>" http://localhost:8080/api/token
+```
 
-- [Discord](https://discord.gg/sD3ABd5)
-- [Matrix](https://matrix.to/#/@topi:topi.wtf)
-- [Twitter](https://twitter.com/topi314)
-- [Email](mailto:hi@topi.wtf)
+```js
+const res = await fetch("http://localhost:8080/api/token", {
+  headers: { Cookie: `sp_dc=${process.env.SP_DC}` },
+});
+const token = await res.json();
+```
+
+## Environment variables
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SPOTIFY_TOKENER_ADDR` | `0.0.0.0:${SERVER_PORT}` (or `8080` if no `SERVER_PORT`) | Listen address, set automatically by the entrypoint |
+| `SPOTIFY_TOKENER_LOG_LEVEL` | `INFO` | Go `slog` level (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
+| `SPOTIFY_TOKENER_CHROME_PATH` | chromedp default | Override headless-shell path |
+| `STARTUP` | — | If set, the entrypoint runs `eval "$STARTUP"` instead (yolks-style, so any command works) |
+
+## Notes
+
+- The service speaks plain HTTP on the allocated port — put a reverse proxy in front if you need TLS.
+- Anonymous tokens work out of the box; account tokens require a valid `sp_dc` cookie.
+- Use of this endpoint is subject to [Spotify's Developer Terms and Policy](https://developer.spotify.com/policy) — you are responsible for how you use it.
+
+## Credits
+
+- Upstream project: [topi314/spotify-tokener](https://github.com/topi314/spotify-tokener) (Apache-2.0)
+- Headless Chrome: [chromedp/headless-shell](https://github.com/chromedp/docker-headless-shell)
